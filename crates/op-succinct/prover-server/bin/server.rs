@@ -10,6 +10,7 @@ use base64::{engine::general_purpose, Engine as _};
 use client_utils::{RawBootInfo, BOOT_INFO_SIZE};
 use host_utils::{fetcher::SP1KonaDataFetcher, get_agg_proof_stdin, get_proof_stdin, ProgramType};
 use log::info;
+use prover_server::run_native_host;
 use serde::{Deserialize, Deserializer, Serialize};
 use sp1_sdk::{
     network::client::NetworkClient,
@@ -18,10 +19,9 @@ use sp1_sdk::{
 };
 use std::{env, fs, time::Duration};
 use tower_http::limit::RequestBodyLimitLayer;
-use zkvm_host::{run_native_host, utils::fetch_header_preimages};
 
-pub const MULTI_BLOCK_ELF: &[u8] = include_bytes!("../../elf/validity-client-elf");
-pub const AGG_ELF: &[u8] = include_bytes!("../../elf/aggregation-client-elf");
+pub const MULTI_BLOCK_ELF: &[u8] = include_bytes!("../../elf/range-elf");
+pub const AGG_ELF: &[u8] = include_bytes!("../../elf/aggregation-elf");
 
 #[derive(Deserialize, Serialize, Debug)]
 struct SpanProofRequest {
@@ -64,6 +64,7 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+/// Request a proof for a span of blocks.
 async fn request_span_proof(
     Json(payload): Json<SpanProofRequest>,
 ) -> Result<(StatusCode, Json<ProofResponse>), AppError> {
@@ -97,6 +98,7 @@ async fn request_span_proof(
     Ok((StatusCode::OK, Json(ProofResponse { proof_id })))
 }
 
+/// Request an aggregation proof for a set of subproofs.
 async fn request_agg_proof(
     Json(payload): Json<AggProofRequest>,
 ) -> Result<(StatusCode, Json<ProofResponse>), AppError> {
@@ -121,10 +123,18 @@ async fn request_agg_proof(
         .map(|proof| proof.proof.clone())
         .collect();
 
-    let l1_head_bytes = hex::decode(payload.head.strip_prefix("0x").expect("Invalid L1 head, no 0x prefix."))?;
+    let l1_head_bytes = hex::decode(
+        payload
+            .head
+            .strip_prefix("0x")
+            .expect("Invalid L1 head, no 0x prefix."),
+    )?;
     let l1_head: [u8; 32] = l1_head_bytes.try_into().unwrap();
 
-    let headers = fetch_header_preimages(&boot_infos, l1_head.into()).await?;
+    let fetcher = SP1KonaDataFetcher::new();
+    let headers = fetcher
+        .get_header_preimages(&boot_infos, l1_head.into())
+        .await?;
 
     let prover = NetworkProver::new();
     let (_, vkey) = prover.setup(MULTI_BLOCK_ELF);
@@ -137,6 +147,7 @@ async fn request_agg_proof(
     Ok((StatusCode::OK, Json(ProofResponse { proof_id })))
 }
 
+/// Get the status of a proof.
 async fn get_proof_status(
     Path(proof_id): Path<String>,
 ) -> Result<(StatusCode, Json<ProofStatus>), AppError> {

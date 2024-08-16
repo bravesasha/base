@@ -7,15 +7,14 @@ sp1_zkvm::entrypoint!(main);
 use alloy_consensus::Header;
 use alloy_primitives::B256;
 use client_utils::{types::AggregationInputs, RawBootInfo};
-use std::collections::HashMap;
-// use kona_client::{
-//     l1::{OracleBlobProvider, OracleL1ChainProvider},
-//     BootInfo,
-// };
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
 /// Note: This is the hardcoded program vkey for the multi-block program. Whenever the multi-block
 /// program changes, update this.
+/// TODO: The aggregation program should take in an arbitrary vkey digest, and the smart contract
+/// should verify the proof matches the arbitrary vkey digest stored in the contract. This means
+/// that the aggregate program would no longer need to update this value.
 const MULTI_BLOCK_PROGRAM_VKEY_DIGEST: [u32; 8] = [
     227309663, 1637133225, 136526498, 1878261023, 2013043842, 450616441, 575447582, 1643259779,
 ];

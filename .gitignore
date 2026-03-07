@@ -8,3 +8,4 @@ docs/specs/node_modules/
 docs/specs/dist/
 docs/specs/.vocs/
 *.log
+crates/succinct/bindings/src/codegen/

@@ -302,7 +302,6 @@ base-macros = { path = "crates/utilities/macros", default-features = false }
 base-succinct-fp = { path = "crates/succinct/fault-proof" }
 base-succinct-prove = { path = "crates/succinct/scripts/prove" }
 base-succinct-elfs = { path = "crates/succinct/utils/elfs" }
-base-succinct-bindings = { path = "crates/succinct/bindings" }
 base-succinct-validity = { path = "crates/succinct/validity" }
 base-succinct-host-utils = { path = "crates/succinct/utils/host" }
 base-succinct-proof-utils = { path = "crates/succinct/utils/proof" }

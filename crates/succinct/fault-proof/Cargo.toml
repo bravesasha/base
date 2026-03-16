@@ -71,19 +71,11 @@ tikv-jemallocator.workspace = true
 tempfile.workspace = true 
 
 [dev-dependencies]
-alloy-signer-local.workspace = true
-alloy-node-bindings.workspace = true
-base-succinct-bindings.workspace = true
-serde_json.workspace = true
-serde.workspace = true
-alloy-rpc-types-trace.workspace = true
-rstest.workspace = true 
-which.workspace = true
+rstest.workspace = true
 
 [features]
 default = [ "ethereum" ]
 ethereum = [ "base-succinct-proof-utils/ethereum" ]
-integration = []
 
 [lints]
 workspace = true

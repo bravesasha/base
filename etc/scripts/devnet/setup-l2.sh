@@ -7,6 +7,12 @@ L2_CHAIN_ID="${L2_CHAIN_ID:-84538453}"
 L1_CHAIN_ID="${L1_CHAIN_ID:-1337}"
 L2_DATA_DIR="${L2_DATA_DIR:-/data}"
 TEMPLATE_DIR="${TEMPLATE_DIR:-/templates}"
+L2_BASE_V1_BLOCK="${L2_BASE_V1_BLOCK:-30}"
+
+if ! [[ "$L2_BASE_V1_BLOCK" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: L2_BASE_V1_BLOCK must be a non-negative integer, got: $L2_BASE_V1_BLOCK"
+  exit 1
+fi
 
 # Skip if L2 genesis already exists (for restarts)
 if [ -f "$OUTPUT_DIR/genesis.json" ] && [ -f "$OUTPUT_DIR/rollup.json" ]; then
@@ -18,6 +24,7 @@ echo "=== L2 Genesis Generator (Live Deployment) ==="
 echo "L1 RPC URL: $L1_RPC_URL"
 echo "L1 Chain ID: $L1_CHAIN_ID"
 echo "L2 Chain ID: $L2_CHAIN_ID"
+echo "Base V1 activation block: $L2_BASE_V1_BLOCK"
 echo "Output directory: $OUTPUT_DIR"
 
 # Wait for L1 RPC to be available
@@ -123,6 +130,36 @@ op-deployer inspect rollup \
   "$L2_CHAIN_ID" \
   > "$OUTPUT_DIR/rollup.json"
 echo "Rollup config written to $OUTPUT_DIR/rollup.json"
+
+L2_BLOCK_TIME=$(jq -re '.block_time' "$OUTPUT_DIR/rollup.json")
+L2_GENESIS_TIME=$(jq -re '.genesis.l2_time' "$OUTPUT_DIR/rollup.json")
+L2_BASE_V1_TIME=$((L2_GENESIS_TIME + L2_BLOCK_TIME * L2_BASE_V1_BLOCK))
+
+echo ""
+echo "=== Configuring Base V1 Activation ==="
+echo "L2 genesis time: $L2_GENESIS_TIME"
+echo "L2 block time: $L2_BLOCK_TIME"
+echo "Base V1 activation block: $L2_BASE_V1_BLOCK"
+echo "Derived Base V1 activation timestamp: $L2_BASE_V1_TIME"
+
+TMP_ROLLUP=$(mktemp)
+jq \
+  --argjson base_v1_time "$L2_BASE_V1_TIME" \
+  '.base = ((.base // {}) + {v1: $base_v1_time})' \
+  "$OUTPUT_DIR/rollup.json" \
+  > "$TMP_ROLLUP"
+mv "$TMP_ROLLUP" "$OUTPUT_DIR/rollup.json"
+
+TMP_GENESIS=$(mktemp)
+jq \
+  --argjson base_v1_time "$L2_BASE_V1_TIME" \
+  '.config.osakaTime = $base_v1_time
+  | .config.base = ((.config.base // {}) + {v1: $base_v1_time})' \
+  "$OUTPUT_DIR/genesis.json" \
+  > "$TMP_GENESIS"
+mv "$TMP_GENESIS" "$OUTPUT_DIR/genesis.json"
+
+echo "Patched Base V1 activation into rollup and genesis configs"
 
 echo "Extracting L1 addresses..."
 op-deployer inspect l1 \

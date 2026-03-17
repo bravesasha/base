@@ -13,6 +13,19 @@ pub const DEVNET_CHAIN_ID: u64 = 84538453;
 /// Gas limit for genesis block configuration.
 pub const GENESIS_GAS_LIMIT: u64 = 100_000_000;
 
+/// Builds a test genesis configuration with Base V1 (EIP-7825) activated at genesis.
+///
+/// Extends [`build_test_genesis`] with Osaka and Base V1 hardforks enabled at timestamp 0.
+pub fn build_test_genesis_v1() -> Genesis {
+    let mut genesis = build_test_genesis();
+    genesis.config.osaka_time = Some(0);
+    genesis.config.extra_fields.insert(
+        "base".to_string(),
+        serde_json::json!({ "v1": 0 }),
+    );
+    genesis
+}
+
 /// Builds a test genesis configuration programmatically.
 ///
 /// Creates a Base Sepolia-like genesis with:

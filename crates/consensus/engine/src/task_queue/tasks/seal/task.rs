@@ -265,6 +265,99 @@ impl<EngineClient_: EngineClient> SealTask<EngineClient_> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use alloy_primitives::{Address, B256, Bytes, U256};
+    use alloy_rpc_types_engine::{
+        ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3, PayloadId,
+    };
+    use base_alloy_rpc_types_engine::{
+        BlobsBundleV2, OpExecutionPayload, OpExecutionPayloadEnvelopeV5, OpExecutionPayloadV4,
+    };
+    use base_consensus_genesis::{BaseHardforkConfig, HardForkConfig, RollupConfig};
+
+    use super::*;
+    use crate::test_utils::{MockEngineClient, TestAttributesBuilder};
+
+    fn base_v1_rollup_config() -> Arc<RollupConfig> {
+        Arc::new(RollupConfig {
+            hardforks: HardForkConfig {
+                ecotone_time: Some(100),
+                jovian_time: Some(150),
+                base: BaseHardforkConfig { v1: Some(200) },
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn test_v5_payload_envelope(timestamp: u64) -> OpExecutionPayloadEnvelopeV5 {
+        OpExecutionPayloadEnvelopeV5 {
+            execution_payload: OpExecutionPayloadV4 {
+                payload_inner: ExecutionPayloadV3 {
+                    payload_inner: ExecutionPayloadV2 {
+                        payload_inner: ExecutionPayloadV1 {
+                            parent_hash: B256::ZERO,
+                            fee_recipient: Address::ZERO,
+                            state_root: B256::ZERO,
+                            receipts_root: B256::ZERO,
+                            logs_bloom: Default::default(),
+                            prev_randao: B256::ZERO,
+                            block_number: 1,
+                            gas_limit: 30_000_000,
+                            gas_used: 0,
+                            timestamp,
+                            extra_data: Bytes::new(),
+                            base_fee_per_gas: U256::ZERO,
+                            block_hash: B256::ZERO,
+                            transactions: vec![],
+                        },
+                        withdrawals: vec![],
+                    },
+                    blob_gas_used: 0,
+                    excess_blob_gas: 0,
+                },
+                withdrawals_root: B256::ZERO,
+            },
+            block_value: U256::ZERO,
+            blobs_bundle: BlobsBundleV2::default(),
+            should_override_builder: false,
+            execution_requests: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn seal_payload_uses_get_payload_v5_for_base_v1() {
+        let cfg = base_v1_rollup_config();
+        let payload_id = PayloadId::new([0u8; 8]);
+        let attributes = TestAttributesBuilder::new().with_timestamp(200).build();
+
+        let engine = Arc::new(
+            MockEngineClient::builder()
+                .with_config(Arc::clone(&cfg))
+                .with_execution_payload_v5(test_v5_payload_envelope(200))
+                .build(),
+        );
+
+        let task = SealTask::new(
+            Arc::clone(&engine),
+            Arc::clone(&cfg),
+            payload_id,
+            attributes.clone(),
+            false,
+            None,
+        );
+
+        let envelope =
+            task.seal_payload(&cfg, engine.as_ref(), payload_id, attributes).await.unwrap();
+
+        assert_eq!(envelope.parent_beacon_block_root, Some(B256::ZERO));
+        assert!(matches!(envelope.execution_payload, OpExecutionPayload::V4(_)));
+    }
+}
+
 #[async_trait]
 impl<EngineClient_: EngineClient> EngineTaskExt for SealTask<EngineClient_> {
     type Output = ();

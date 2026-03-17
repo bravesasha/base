@@ -290,14 +290,14 @@ pub enum OpSpecId {
     // ... existing variants ...
     JOVIAN,
     BASE_V1,  // <-- add
-    OSAKA,
 }
 ```
 
-Extend `into_eth_spec()` — if no new Ethereum EL upgrade is paired, reuse the previous mapping:
+Extend `into_eth_spec()` to map the Base upgrade to the correct paired Ethereum EL spec:
 
 ```rust
-Self::ISTHMUS | Self::JOVIAN | Self::BASE_V1 => SpecId::PRAGUE,
+Self::ISTHMUS | Self::JOVIAN => SpecId::PRAGUE,
+Self::BASE_V1 => SpecId::OSAKA,
 ```
 
 Add the string name and wire up `FromStr` and `From<OpSpecId> for &'static str`:
@@ -319,17 +319,27 @@ OpSpecId::BASE_V1 => name::BASE_V1,
 
 **File:** [`crates/execution/revm/src/precompiles.rs`](https://github.com/base/base/blob/main/crates/execution/revm/src/precompiles.rs)
 
-If the upgrade introduces new precompiles, create a new `base_v1()` function. If it reuses the previous set, extend the existing arm:
+If the upgrade changes precompile behavior, create a new `base_v1()` function. Reuse the prior set
+only when the precompile table and rules are identical:
 
 ```rust
-// Reuse previous precompile set
-OpSpecId::JOVIAN | OpSpecId::BASE_V1 => jovian(),
-
-// Or add a new set
+OpSpecId::JOVIAN => jovian(),
 OpSpecId::BASE_V1 => base_v1(),
 ```
 
-Export any new precompile module from `lib.rs`.
+For example, Base V1 starts from `jovian()` and overrides the precompiles that pick up Osaka
+rules:
+
+```rust
+pub fn base_v1() -> &'static Precompiles {
+    let mut precompiles = jovian().clone();
+    precompiles.extend([modexp::OSAKA, secp256r1::P256VERIFY_OSAKA]);
+    precompiles
+}
+```
+
+If you maintain FPVM accelerated precompile providers, add a matching
+`accelerated_base_v1()` constructor even when the accelerated address set is unchanged.
 
 ---
 

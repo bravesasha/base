@@ -483,6 +483,41 @@ mod tests {
     }
 
     #[test]
+    fn test_evm_env_uses_base_v1_for_genesis_chain_spec() {
+        let genesis: Genesis = serde_json::from_str(
+            r#"
+            {
+              "config": {
+                "chainId": 8453,
+                "bedrockBlock": 0,
+                "regolithTime": 0,
+                "canyonTime": 0,
+                "ecotoneTime": 0,
+                "fjordTime": 0,
+                "graniteTime": 0,
+                "holoceneTime": 0,
+                "isthmusTime": 0,
+                "jovianTime": 54,
+                "osakaTime": 55,
+                "base": {
+                  "v1": 55
+                }
+              }
+            }
+            "#,
+        )
+        .unwrap();
+        let chain_spec = Arc::new(base_execution_chainspec::OpChainSpec::from(genesis));
+        let evm_config = OpEvmConfig::optimism(chain_spec);
+        let header = Header { timestamp: 55, ..Default::default() };
+
+        let evm_env = evm_config.evm_env(&header).unwrap();
+
+        assert_eq!(*evm_env.cfg_env.spec(), OpSpecId::BASE_V1);
+        assert_eq!(SpecId::from(*evm_env.cfg_env.spec()), SpecId::OSAKA);
+    }
+
+    #[test]
     fn test_evm_with_env_and_default_inspector() {
         let evm_config = test_evm_config();
         let db = CacheDB::<EmptyDBTyped<ProviderError>>::default();

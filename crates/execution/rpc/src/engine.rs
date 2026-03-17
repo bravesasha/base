@@ -442,3 +442,13 @@ where
         self.into_rpc().remove_context()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::OP_ENGINE_CAPABILITIES;
+
+    #[test]
+    fn capabilities_include_get_payload_v5() {
+        assert!(OP_ENGINE_CAPABILITIES.contains(&"engine_getPayloadV5"));
+    }
+}

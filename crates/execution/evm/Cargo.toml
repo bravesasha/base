@@ -47,6 +47,7 @@ alloy-genesis.workspace = true
 reth-evm = { workspace = true, features = ["test-utils"] }
 reth-revm = { workspace = true, features = ["test-utils"] }
 base-execution-primitives = { workspace = true, features = ["arbitrary"] }
+serde_json.workspace = true
 
 [features]
 default = [ "std" ]

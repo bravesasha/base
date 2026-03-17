@@ -100,6 +100,7 @@ MINIO_CONSOLE_PORT=7001
 # Chain Configuration
 L1_CHAIN_ID=1337
 L2_CHAIN_ID=84538453
+L2_BASE_V1_BLOCK=30
 
 # Metering Resource Limits
 # Whole-block budgets for gas/state-root/DA, plus a per-flashblock execution budget.

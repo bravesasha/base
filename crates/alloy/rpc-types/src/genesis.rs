@@ -285,4 +285,13 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn test_op_genesis_info_serialize_includes_empty_base() {
+        let genesis_info = OpGenesisInfo { bedrock_block: Some(10), ..Default::default() };
+        let serialized = serde_json::to_value(genesis_info).unwrap();
+
+        assert_eq!(serialized.get("bedrockBlock").and_then(serde_json::Value::as_u64), Some(10));
+        assert_eq!(serialized.get("base"), Some(&serde_json::json!({ "v1": null })));
+    }
 }

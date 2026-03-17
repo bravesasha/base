@@ -4001,6 +4001,7 @@ dependencies = [
  "reth-rpc-eth-api",
  "reth-storage-errors",
  "revm",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -4467,6 +4468,7 @@ dependencies = [
  "alloy-genesis",
  "alloy-network",
  "alloy-primitives",
+ "alloy-provider",
  "alloy-rpc-types-engine",
  "alloy-rpc-types-eth",
  "base-alloy-consensus",
@@ -4528,6 +4530,7 @@ dependencies = [
 name = "base-node-runner"
 version = "0.0.0"
 dependencies = [
+ "alloy-consensus",
  "alloy-eips",
  "alloy-genesis",
  "alloy-primitives",
@@ -4537,6 +4540,7 @@ dependencies = [
  "alloy-rpc-types-engine",
  "alloy-signer",
  "base-alloy-network",
+ "base-alloy-rpc-types",
  "base-alloy-rpc-types-engine",
  "base-cli-utils",
  "base-engine-tree",
@@ -4547,6 +4551,7 @@ dependencies = [
  "base-execution-rpc",
  "base-execution-storage",
  "base-node-core",
+ "base-node-runner",
  "base-test-utils",
  "base-txpool",
  "chrono",

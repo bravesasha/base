@@ -4,7 +4,7 @@ use alloc::{boxed::Box, string::String, vec, vec::Vec};
 
 use alloy_primitives::{Address, Bytes};
 use base_proof_preimage::{HintWriterClient, PreimageOracleClient};
-use base_revm::{OpSpecId, fjord, granite, isthmus, jovian};
+use base_revm::{OpSpecId, base_v1, fjord, granite, isthmus, jovian};
 use revm::{
     context::{Cfg, ContextTr, LocalContextTr},
     handler::{EthPrecompiles, PrecompileProvider},
@@ -46,7 +46,8 @@ where
             OpSpecId::FJORD => fjord(),
             OpSpecId::GRANITE | OpSpecId::HOLOCENE => granite(),
             OpSpecId::ISTHMUS => isthmus(),
-            OpSpecId::JOVIAN | OpSpecId::BASE_V1 => jovian(),
+            OpSpecId::JOVIAN => jovian(),
+            OpSpecId::BASE_V1 => base_v1(),
         };
 
         let accelerated_precompiles = match spec {
@@ -56,7 +57,8 @@ where
             OpSpecId::ECOTONE | OpSpecId::FJORD => accelerated_ecotone::<H, O>(),
             OpSpecId::GRANITE | OpSpecId::HOLOCENE => accelerated_granite::<H, O>(),
             OpSpecId::ISTHMUS => accelerated_isthmus::<H, O>(),
-            OpSpecId::JOVIAN | OpSpecId::BASE_V1 => accelerated_jovian::<H, O>(),
+            OpSpecId::JOVIAN => accelerated_jovian::<H, O>(),
+            OpSpecId::BASE_V1 => accelerated_base_v1::<H, O>(),
         };
 
         Self {
@@ -287,4 +289,93 @@ where
     ));
 
     base
+}
+
+/// The accelerated precompiles for the Base V1 spec.
+fn accelerated_base_v1<H, O>() -> Vec<AcceleratedPrecompile<H, O>>
+where
+    H: HintWriterClient + Send + Sync,
+    O: PreimageOracleClient + Send + Sync,
+{
+    // Base V1 changes MODEXP and P256VERIFY pricing, but the accelerated set is unchanged.
+    accelerated_jovian::<H, O>()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashSet, vec::Vec};
+
+    use async_trait::async_trait;
+    use base_proof_preimage::{
+        HintWriterClient, PreimageKey, PreimageOracleClient, errors::PreimageOracleResult,
+    };
+    use revm::{
+        precompile::{PrecompileError, modexp, secp256r1},
+        primitives::eip7823,
+    };
+
+    use super::*;
+
+    #[derive(Clone, Debug)]
+    struct DummyClient;
+
+    #[async_trait]
+    impl HintWriterClient for DummyClient {
+        async fn write(&self, _hint: &str) -> PreimageOracleResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[async_trait]
+    impl PreimageOracleClient for DummyClient {
+        async fn get(&self, _key: PreimageKey) -> PreimageOracleResult<Vec<u8>> {
+            unreachable!()
+        }
+
+        async fn get_exact(&self, _key: PreimageKey, _buf: &mut [u8]) -> PreimageOracleResult<()> {
+            unreachable!()
+        }
+    }
+
+    fn encode_length(len: usize) -> [u8; 32] {
+        let mut encoded = [0u8; 32];
+        encoded[24..].copy_from_slice(&(len as u64).to_be_bytes());
+        encoded
+    }
+
+    fn oversized_modexp_input() -> Vec<u8> {
+        let mut input = Vec::with_capacity(96);
+        input.extend_from_slice(&encode_length(eip7823::INPUT_SIZE_LIMIT + 1));
+        input.extend_from_slice(&encode_length(0));
+        input.extend_from_slice(&encode_length(1));
+        input
+    }
+
+    #[test]
+    fn test_base_v1_provider_uses_v1_precompile_rules() {
+        let provider =
+            OpFpvmPrecompiles::new_with_spec(OpSpecId::BASE_V1, DummyClient, DummyClient);
+
+        let p256 = provider.inner.precompiles.get(secp256r1::P256VERIFY_OSAKA.address()).unwrap();
+        assert!(matches!(p256.execute(&[], 5_000), Err(PrecompileError::OutOfGas)));
+
+        let modexp = provider.inner.precompiles.get(modexp::OSAKA.address()).unwrap();
+        assert!(matches!(
+            modexp.execute(&oversized_modexp_input(), u64::MAX),
+            Err(PrecompileError::ModexpEip7823LimitSize)
+        ));
+    }
+
+    #[test]
+    fn test_base_v1_provider_uses_v1_accelerated_set() {
+        let provider =
+            OpFpvmPrecompiles::new_with_spec(OpSpecId::BASE_V1, DummyClient, DummyClient);
+        let actual: HashSet<_> = provider.accelerated_precompiles.keys().copied().collect();
+        let expected: HashSet<_> = accelerated_base_v1::<DummyClient, DummyClient>()
+            .into_iter()
+            .map(|precompile| precompile.address)
+            .collect();
+
+        assert_eq!(actual, expected);
+    }
 }

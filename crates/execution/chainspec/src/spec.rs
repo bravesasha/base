@@ -18,13 +18,13 @@ use reth_network_peers::NodeRecord;
 use reth_primitives_traits::SealedHeader;
 
 use crate::{
-    BASE_DEVNET_0_SEPOLIA_DEV_0, BASE_MAINNET, BASE_SEPOLIA, OP_DEV, compute_jovian_base_fee,
-    decode_holocene_base_fee,
+    BASE_DEVNET_0_SEPOLIA_DEV_0, BASE_MAINNET, BASE_SEPOLIA, BASE_ZERONET, OP_DEV,
+    compute_jovian_base_fee, decode_holocene_base_fee,
 };
 
 /// All supported chain names for the CLI.
 pub const SUPPORTED_CHAINS: &[&str] =
-    &["base", "base_sepolia", "base-sepolia", "base-devnet-0-sepolia-dev-0", "dev"];
+    &["base", "base_sepolia", "base-sepolia", "base-devnet-0-sepolia-dev-0", "zeronet", "dev"];
 
 /// Genesis info extracted from a Base genesis config.
 #[derive(Default, Debug)]
@@ -118,6 +118,7 @@ impl OpChainSpec {
             "base" => Some(BASE_MAINNET.clone()),
             "base_sepolia" | "base-sepolia" => Some(BASE_SEPOLIA.clone()),
             "base-devnet-0-sepolia-dev-0" => Some(BASE_DEVNET_0_SEPOLIA_DEV_0.clone()),
+            "zeronet" => Some(BASE_ZERONET.clone()),
             _ => None,
         }
     }

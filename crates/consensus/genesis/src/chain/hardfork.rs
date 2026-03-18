@@ -127,14 +127,6 @@ impl HardForkConfig {
         ]
         .into_iter()
     }
-
-    /// Returns an iterator over hardforks scheduled to activate at the given timestamp.
-    pub fn activations_at_timestamp(
-        &self,
-        timestamp: u64,
-    ) -> impl Iterator<Item = &'static str> + '_ {
-        self.iter().filter_map(move |(name, time)| (time == Some(timestamp)).then_some(name))
-    }
 }
 
 #[cfg(test)]
@@ -263,22 +255,6 @@ mod tests {
         assert_eq!(iter.next(), Some(("Jovian", Some(10))));
         assert_eq!(iter.next(), Some(("Base V1", Some(11))));
         assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn test_hardforks_activations_at_timestamp() {
-        let hardforks = HardForkConfig {
-            canyon_time: Some(10),
-            jovian_time: Some(12),
-            base: BaseHardforkConfig { v1: Some(12) },
-            ..Default::default()
-        };
-
-        assert!(hardforks.activations_at_timestamp(11).next().is_none());
-        assert_eq!(
-            hardforks.activations_at_timestamp(12).collect::<Vec<_>>(),
-            vec!["Jovian", "Base V1"]
-        );
     }
 
     #[test]

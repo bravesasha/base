@@ -6,6 +6,7 @@ use base_action_harness::{
 };
 use base_consensus_genesis::{HardForkConfig, RollupConfig};
 use base_consensus_registry::Registry;
+use base_revm::OpSpecId;
 
 // ---------------------------------------------------------------------------
 // Section 1: Base mainnet config — hardfork boundary tests
@@ -226,6 +227,27 @@ fn base_v1_is_standalone_from_jovian() {
     assert!(!rc.is_base_v1_active(u64::MAX), "BaseV1 must remain inactive when unscheduled");
 }
 
+/// In synthetic configs, Base V1 activates exactly at its configured timestamp
+/// and swaps the executor spec from Jovian to Base V1 / Osaka at that boundary.
+#[test]
+fn synthetic_base_v1_activates_exactly_at_configured_timestamp() {
+    let rc = TestRollupConfigBuilder::base_mainnet(&BatcherConfig::default())
+        .through_isthmus()
+        .with_jovian_at(0)
+        .with_base_v1_at(6)
+        .with_block_time(2)
+        .build();
+
+    assert!(!rc.is_base_v1_active(4), "BaseV1 must be inactive before its timestamp");
+    assert!(rc.is_base_v1_active(6), "BaseV1 must be active at its timestamp");
+    assert!(!rc.is_first_base_v1_block(4), "pre-activation block must not be the first V1 block");
+    assert!(rc.is_first_base_v1_block(6), "activation block must be the first V1 block");
+    assert!(!rc.is_first_base_v1_block(8), "post-activation blocks must not retrigger V1");
+
+    assert_eq!(rc.spec_id(4), OpSpecId::JOVIAN, "pre-activation blocks must use Jovian rules");
+    assert_eq!(rc.spec_id(6), OpSpecId::BASE_V1, "activation block must use Base V1 rules");
+}
+
 // ---------------------------------------------------------------------------
 // Section 2: Derivation tests — pipeline behaviour at hardfork boundaries
 //
@@ -438,4 +460,68 @@ async fn jovian_derivation_crosses_activation_boundary() {
         4,
         "safe head should advance past the Jovian activation boundary"
     );
+}
+
+/// Derivation succeeds across the Base V1 activation boundary without any
+/// empty-block or transition-batch special case.
+///
+/// Configuration: Jovian active from genesis, Base V1 at ts=6 (block 3).
+///
+/// ```text
+///   block 1 -> ts=2  pre-V1, user txs ok
+///   block 2 -> ts=4  pre-V1, user txs ok
+///   block 3 -> ts=6  first V1 block, user txs still ok
+///   block 4 -> ts=8  post-V1, user txs ok
+/// ```
+#[tokio::test]
+async fn base_v1_derivation_crosses_activation_boundary() {
+    let batcher_cfg = BatcherConfig {
+        encoder: EncoderConfig { da_type: DaType::Calldata, ..EncoderConfig::default() },
+        ..BatcherConfig::default()
+    };
+
+    let rollup_cfg = TestRollupConfigBuilder::base_mainnet(&batcher_cfg)
+        .through_isthmus()
+        .with_jovian_at(0)
+        .with_base_v1_at(6)
+        .with_block_time(2)
+        .build();
+    let mut h = ActionTestHarness::new(L1MinerConfig::default(), rollup_cfg);
+
+    let l1_chain = SharedL1Chain::from_blocks(h.l1.chain().to_vec());
+    let mut builder = h.create_l2_sequencer(l1_chain);
+
+    for _ in 1..=4u64 {
+        let mut source = ActionL2Source::new();
+        source.push(builder.build_next_block().expect("build L2 block"));
+        let mut batcher = Batcher::new(source, &h.rollup_config, batcher_cfg.clone());
+        batcher.advance(&mut h.l1).await.expect("advance");
+    }
+
+    let (mut verifier, _chain) = h.create_verifier_from_sequencer(
+        &builder,
+        SharedL1Chain::from_blocks(h.l1.chain().to_vec()),
+    );
+    verifier.initialize().await.expect("initialize");
+
+    for i in 1..=4u64 {
+        let l1_block = block_info_from(h.l1.block_by_number(i).expect("block exists"));
+        verifier.act_l1_head_signal(l1_block).await.expect("signal");
+        let derived = verifier.act_l2_pipeline_full().await.expect("pipeline");
+        assert_eq!(derived, 1, "L1 block {i} should derive exactly one L2 block");
+    }
+
+    assert_eq!(
+        verifier.l2_safe().block_info.number,
+        4,
+        "safe head should advance past the Base V1 activation boundary"
+    );
+
+    let counts = verifier.derived_user_tx_counts();
+    let find = |n: u64| counts.iter().find(|(bn, _)| *bn == n).map(|(_, c)| *c);
+
+    assert_eq!(find(1), Some(1), "block 1: pre-V1 batch accepted with 1 user tx");
+    assert_eq!(find(2), Some(1), "block 2: pre-V1 batch accepted with 1 user tx");
+    assert_eq!(find(3), Some(1), "block 3: first V1 block must still accept user txs");
+    assert_eq!(find(4), Some(1), "block 4: post-V1 batch accepted with 1 user tx");
 }

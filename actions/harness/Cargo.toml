@@ -29,7 +29,7 @@ base-protocol = { workspace = true, features = ["std"] }
 base-execution-evm.workspace = true
 base-alloy-consensus = { workspace = true, features = ["std", "evm"] }
 base-execution-chainspec.workspace = true
-base-consensus-genesis = { workspace = true, features = ["std"] }
+base-consensus-genesis = { workspace = true, features = ["std", "revm"] }
 base-consensus-derive = { workspace = true, features = ["test-utils"] }
 base-consensus-registry.workspace = true
 base-blobs.workspace = true

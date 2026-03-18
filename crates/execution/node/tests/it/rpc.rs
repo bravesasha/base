@@ -5,9 +5,7 @@ use std::sync::Arc;
 use alloy_eips::eip7910::EthConfig;
 use alloy_provider::Provider;
 use base_execution_chainspec::{BASE_MAINNET, OpChainSpecBuilder};
-use base_execution_forks::BaseUpgrade;
 use base_node_core::OpNode;
-use reth_chainspec::{EthereumHardfork, ForkCondition};
 use reth_network::types::NatResolver;
 use reth_node_builder::{NodeBuilder, NodeHandle};
 use reth_node_core::{
@@ -72,12 +70,7 @@ async fn test_eth_config_available_on_base_node() -> eyre::Result<()> {
     reth_tracing::init_test_tracing();
 
     let exec = Runtime::test();
-    let chain = Arc::new(
-        OpChainSpecBuilder::base_mainnet()
-            .with_fork(EthereumHardfork::Osaka, ForkCondition::Timestamp(0))
-            .with_fork(BaseUpgrade::V1, ForkCondition::Timestamp(0))
-            .build(),
-    );
+    let chain = Arc::new(OpChainSpecBuilder::base_mainnet().base_v1_activated().build());
     let node_config = NodeConfig::test()
         .map_chain(chain)
         .with_rpc(RpcServerArgs::default().with_unused_ports().with_http());

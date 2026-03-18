@@ -19,17 +19,6 @@ use crate::{
     state::EngineSyncStateUpdate,
 };
 
-const BASE_V1_ASCII_ART: &str = "\
-BBBBBB    AAAA    SSSSSS  EEEEEEE    V   V    1
-BB   BB  AA  AA  SS       EE         V   V   11
-BBBBBB   AAAAAA   SSSSS   EEEEE      V   V    1
-BB   BB  AA  AA      SS   EE          V V     1
-BBBBBB   AA  AA  SSSSSS   EEEEEEE      V     111";
-
-fn activation_banner(hardfork: &str) -> Option<&'static str> {
-    (hardfork == "Base V1").then_some(BASE_V1_ASCII_ART)
-}
-
 /// The task to insert a payload into the execution engine.
 #[derive(Debug, Clone)]
 pub struct InsertTask<EngineClient_: EngineClient> {
@@ -58,32 +47,6 @@ impl<EngineClient_: EngineClient> InsertTask<EngineClient_> {
     /// Checks the response of the `engine_newPayload` call.
     const fn check_new_payload_status(&self, status: &PayloadStatusEnum) -> bool {
         matches!(status, PayloadStatusEnum::Valid | PayloadStatusEnum::Syncing)
-    }
-
-    fn log_hardfork_activations(&self, block: &L2BlockInfo) {
-        for hardfork in
-            self.rollup_config.hardforks.activations_at_timestamp(block.block_info.timestamp)
-        {
-            info!(
-                target: "engine",
-                hardfork,
-                number = block.block_info.number,
-                timestamp = block.block_info.timestamp,
-                "activating: {} fork",
-                hardfork
-            );
-
-            if let Some(banner) = activation_banner(hardfork) {
-                info!(
-                    target: "engine",
-                    hardfork,
-                    number = block.block_info.number,
-                    timestamp = block.block_info.timestamp,
-                    "\n{}",
-                    banner
-                );
-            }
-        }
     }
 }
 
@@ -163,8 +126,6 @@ impl<EngineClient_: EngineClient> EngineTaskExt for InsertTask<EngineClient_> {
             L2BlockInfo::from_block_and_genesis(&block, &self.rollup_config.genesis)
                 .map_err(InsertTaskError::L2BlockInfoConstruction)?;
 
-        self.log_hardfork_activations(&new_unsafe_ref);
-
         // Send a FCU to canonicalize the imported block.
         SynchronizeTask::new(
             Arc::clone(&self.client),
@@ -192,20 +153,5 @@ impl<EngineClient_: EngineClient> EngineTaskExt for InsertTask<EngineClient_> {
         );
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{BASE_V1_ASCII_ART, activation_banner};
-
-    #[test]
-    fn base_v1_activation_has_banner() {
-        assert_eq!(activation_banner("Base V1"), Some(BASE_V1_ASCII_ART));
-    }
-
-    #[test]
-    fn other_activations_do_not_have_banner() {
-        assert_eq!(activation_banner("Jovian"), None);
     }
 }

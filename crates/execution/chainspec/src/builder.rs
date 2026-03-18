@@ -122,7 +122,7 @@ impl OpChainSpecBuilder {
         self
     }
 
-    /// Enable Base V1 at genesis.
+    /// Enable Base V1 and its paired Osaka hardfork at genesis.
     pub fn base_v1_activated(mut self) -> Self {
         self = self.jovian_activated();
         self.inner = self.inner.with_fork(EthereumHardfork::Osaka, ForkCondition::Timestamp(0));

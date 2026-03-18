@@ -3,8 +3,9 @@
 use alloy_eips::{
     eip4844::BLOB_TX_MIN_BLOB_GASPRICE,
     eip7840::BlobParams,
-    eip7910::{EthConfig, EthForkConfig},
+    eip7910::{EthConfig, EthForkConfig, SystemContract},
 };
+use base_execution_forks::BaseUpgrades;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use reth_chainspec::{ChainSpecProvider, EthereumHardforks, Hardforks};
 use reth_evm::ConfigureEvm;
@@ -12,6 +13,23 @@ use reth_node_api::NodePrimitives;
 use reth_primitives_traits::header::HeaderMut;
 use reth_rpc_eth_api::helpers::config::{EthConfigApiServer, EthConfigHandler};
 use reth_storage_api::BlockReaderIdExt;
+
+fn sanitize_system_contracts_for_fork(
+    chain_spec: &impl BaseUpgrades,
+    fork_config: &mut EthForkConfig,
+) {
+    let activation_time = fork_config.activation_time;
+
+    fork_config.system_contracts.retain(|contract, _| match contract {
+        SystemContract::BeaconRoots => chain_spec.is_ecotone_active_at_timestamp(activation_time),
+        SystemContract::HistoryStorage => {
+            chain_spec.is_isthmus_active_at_timestamp(activation_time)
+        }
+        SystemContract::ConsolidationRequestPredeploy
+        | SystemContract::DepositContract
+        | SystemContract::WithdrawalRequestPredeploy => false,
+    });
+}
 
 /// RPC endpoint support for Base's `eth_config` response.
 ///
@@ -42,7 +60,7 @@ impl<Provider, Evm> BaseEthConfigHandler<Provider, Evm> {
 
 impl<Provider, Evm> BaseEthConfigHandler<Provider, Evm>
 where
-    Provider: ChainSpecProvider<ChainSpec: Hardforks + EthereumHardforks>
+    Provider: ChainSpecProvider<ChainSpec: Hardforks + EthereumHardforks + BaseUpgrades>
         + BlockReaderIdExt<Header: HeaderMut>
         + Clone
         + 'static,
@@ -74,11 +92,25 @@ where
             Self::zero_blob_schedule(last);
         }
     }
+
+    fn sanitize_system_contracts(&self, config: &mut EthConfig) {
+        let chain_spec = self.provider.chain_spec();
+
+        sanitize_system_contracts_for_fork(chain_spec.as_ref(), &mut config.current);
+
+        if let Some(next) = config.next.as_mut() {
+            sanitize_system_contracts_for_fork(chain_spec.as_ref(), next);
+        }
+
+        if let Some(last) = config.last.as_mut() {
+            sanitize_system_contracts_for_fork(chain_spec.as_ref(), last);
+        }
+    }
 }
 
 impl<Provider, Evm> BaseEthConfigApiServer for BaseEthConfigHandler<Provider, Evm>
 where
-    Provider: ChainSpecProvider<ChainSpec: Hardforks + EthereumHardforks>
+    Provider: ChainSpecProvider<ChainSpec: Hardforks + EthereumHardforks + BaseUpgrades>
         + BlockReaderIdExt<Header: HeaderMut>
         + Clone
         + 'static,
@@ -90,6 +122,73 @@ where
             self.evm_config.clone(),
         ))?;
         self.sanitize_blob_schedules(&mut config);
+        self.sanitize_system_contracts(&mut config);
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use alloy_eips::{
+        eip4844::BLOB_TX_MIN_BLOB_GASPRICE,
+        eip7840::BlobParams,
+        eip7910::{EthForkConfig, SystemContract},
+    };
+    use base_execution_chainspec::OpChainSpecBuilder;
+
+    use super::sanitize_system_contracts_for_fork;
+
+    fn zero_blob_params() -> BlobParams {
+        BlobParams {
+            target_blob_count: 0,
+            max_blob_count: 0,
+            update_fraction: 0,
+            min_blob_fee: BLOB_TX_MIN_BLOB_GASPRICE,
+            max_blobs_per_tx: 0,
+            blob_base_cost: 0,
+        }
+    }
+
+    fn prague_system_contracts() -> BTreeMap<SystemContract, alloy_primitives::Address> {
+        SystemContract::cancun().into_iter().chain(SystemContract::prague(None)).collect()
+    }
+
+    fn fork_config(activation_time: u64) -> EthForkConfig {
+        EthForkConfig {
+            activation_time,
+            blob_schedule: zero_blob_params(),
+            chain_id: 1,
+            fork_id: Default::default(),
+            precompiles: Default::default(),
+            system_contracts: prague_system_contracts(),
+        }
+    }
+
+    #[test]
+    fn ecotone_only_keeps_beacon_roots() {
+        let chain_spec = OpChainSpecBuilder::base_mainnet().ecotone_activated().build();
+        let mut fork_config = fork_config(0);
+
+        sanitize_system_contracts_for_fork(&chain_spec, &mut fork_config);
+
+        assert_eq!(
+            fork_config.system_contracts.keys().copied().collect::<Vec<_>>(),
+            vec![SystemContract::BeaconRoots]
+        );
+    }
+
+    #[test]
+    fn isthmus_keeps_beacon_roots_and_history_storage() {
+        let chain_spec = OpChainSpecBuilder::base_mainnet().isthmus_activated().build();
+        let mut fork_config = fork_config(0);
+
+        sanitize_system_contracts_for_fork(&chain_spec, &mut fork_config);
+
+        assert_eq!(
+            fork_config.system_contracts.keys().copied().collect::<Vec<_>>(),
+            vec![SystemContract::BeaconRoots, SystemContract::HistoryStorage]
+        );
     }
 }

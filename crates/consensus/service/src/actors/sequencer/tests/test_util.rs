@@ -34,5 +34,7 @@ pub(crate) fn test_actor() -> SequencerActor<
         origin_selector: MockOriginSelector::new(),
         rollup_config: Arc::new(RollupConfig::default()),
         unsafe_payload_gossip_client: MockUnsafePayloadGossipClient::new(),
+        conductor_commit_backoff: None,
+        pending_conductor_commit: None,
     }
 }

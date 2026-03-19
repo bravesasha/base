@@ -10,7 +10,7 @@ pub use engine::{
     BuildRequest, EngineActor, EngineActorRequest, EngineClientError, EngineClientResult,
     EngineConfig, EngineDerivationClient, EngineError, EngineProcessingRequest, EngineProcessor,
     EngineRequestReceiver, EngineRpcProcessor, EngineRpcRequest, EngineRpcRequestReceiver,
-    QueuedEngineDerivationClient, ResetRequest, SealRequest,
+    GetPayloadRequest, QueuedEngineDerivationClient, ResetRequest, SealRequest,
 };
 
 mod rpc;

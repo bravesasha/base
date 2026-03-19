@@ -56,6 +56,24 @@ pub struct SequencerArgs {
         value_parser = |arg: &str| -> Result<Duration, ParseIntError> {Ok(Duration::from_secs(arg.parse()?))}
     )]
     pub conductor_rpc_timeout: Duration,
+
+    /// Backoff duration in milliseconds to apply when a conductor commit fails at runtime.
+    /// The sequencer skips gossip on commit failure, retains the sealed payload, and retries
+    /// the conductor commit after this delay before building the next block.
+    /// Has no effect when `--without-backoff` is set.
+    #[arg(
+        long = "conductor.commit-backoff-ms",
+        env = "BASE_NODE_CONDUCTOR_COMMIT_BACKOFF_MS",
+        default_value = "50",
+        value_parser = |arg: &str| -> Result<Duration, ParseIntError> {Ok(Duration::from_millis(arg.parse()?))}
+    )]
+    pub conductor_commit_backoff_ms: Duration,
+
+    /// Disable the conductor commit backoff entirely. When set, conductor commit failures are
+    /// logged and ignored; gossip and insertion proceed regardless. Overrides
+    /// `--conductor.commit-backoff-ms`.
+    #[arg(long = "without-backoff", default_value = "false", env = "BASE_NODE_WITHOUT_BACKOFF")]
+    pub without_backoff: bool,
 }
 
 impl Default for SequencerArgs {
@@ -74,6 +92,28 @@ impl SequencerArgs {
             sequencer_recovery_mode: self.recover,
             conductor_rpc_url: self.conductor_rpc.clone(),
             l1_conf_delay: self.l1_confs,
+            conductor_commit_backoff: (!self.without_backoff)
+                .then_some(self.conductor_commit_backoff_ms),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use clap::Parser;
+    use rstest::rstest;
+
+    use super::SequencerArgs;
+
+    #[rstest]
+    #[case::default_backoff(&[], Some(Duration::from_millis(50)))]
+    #[case::custom_backoff_ms(&["--conductor.commit-backoff-ms", "200"], Some(Duration::from_millis(200)))]
+    #[case::without_backoff(&["--without-backoff"], None)]
+    #[case::without_backoff_ignores_ms(&["--without-backoff", "--conductor.commit-backoff-ms", "200"], None)]
+    fn config_conductor_commit_backoff(#[case] args: &[&str], #[case] expected: Option<Duration>) {
+        let parsed = SequencerArgs::parse_from(std::iter::once("test").chain(args.iter().copied()));
+        assert_eq!(parsed.config().conductor_commit_backoff, expected);
     }
 }

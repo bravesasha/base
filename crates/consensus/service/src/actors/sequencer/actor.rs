@@ -7,7 +7,7 @@ use std::{
 
 use alloy_rpc_types_engine::PayloadId;
 use async_trait::async_trait;
-use base_alloy_rpc_types_engine::OpPayloadAttributes;
+use base_alloy_rpc_types_engine::{OpExecutionPayloadEnvelope, OpPayloadAttributes};
 use base_consensus_derive::{AttributesBuilder, PipelineErrorKind};
 use base_consensus_engine::{InsertTaskError, SealTaskError, SynchronizeTaskError};
 use base_consensus_genesis::RollupConfig;
@@ -45,7 +45,7 @@ pub(super) struct UnsealedPayloadHandle {
 /// The return payload of the `seal_last_and_start_next` function. This allows the sequencer
 /// to make an informed decision about when to seal and build the next block.
 #[derive(Debug)]
-struct SealLastStartNextResult {
+pub(super) struct SealLastStartNextResult {
     /// The [`UnsealedPayloadHandle`] that was built.
     pub unsealed_payload_handle: Option<UnsealedPayloadHandle>,
     /// How long it took to execute the seal operation.
@@ -89,6 +89,11 @@ pub struct SequencerActor<
     pub rollup_config: Arc<RollupConfig>,
     /// A client to asynchronously sign and gossip built payloads to the network actor.
     pub unsafe_payload_gossip_client: UnsafePayloadGossipClient_,
+    /// Backoff to apply when a conductor commit fails. [`None`] disables retry logic entirely.
+    pub conductor_commit_backoff: Option<Duration>,
+    /// Sealed but NOT YET inserted payload whose conductor commit failed and is pending retry on
+    /// the next tick. Only set when `conductor_commit_backoff` is `Some`.
+    pub pending_conductor_commit: Option<OpExecutionPayloadEnvelope>,
 }
 
 impl<
@@ -117,7 +122,7 @@ where
     ///
     /// If a new block was started, it will return the associated [`UnsealedPayloadHandle`] so
     /// that it may be sealed and committed in a future call to this function.
-    async fn seal_last_and_start_next(
+    pub(super) async fn seal_last_and_start_next(
         &mut self,
         payload_to_seal: Option<&UnsealedPayloadHandle>,
     ) -> Result<SealLastStartNextResult, SequencerActorError> {
@@ -130,23 +135,34 @@ where
             None => Duration::default(),
         };
 
-        let unsealed_payload_handle = self.build_unsealed_payload().await?;
+        // Skip starting a new build if a conductor commit is pending retry — the stashed payload
+        // will move the unsafe head on the next tick, making any build started now likely to be
+        // rejected with `UnsafeHeadChangedSinceBuild`.
+        let unsealed_payload_handle = if self.pending_conductor_commit.is_some() {
+            None
+        } else {
+            self.build_unsealed_payload().await?
+        };
 
         Ok(SealLastStartNextResult { unsealed_payload_handle, seal_duration })
     }
 
-    /// Sends a seal request to seal the provided [`UnsealedPayloadHandle`], committing and
-    /// gossiping the resulting block, if one is built.
-    async fn seal_and_commit_payload_if_applicable(
-        &self,
+    /// Fetches the sealed payload from the engine, commits it to the conductor (if present),
+    /// gossips it, and then fires off an insert request to the engine.
+    ///
+    /// When `conductor_commit_backoff` is set and the conductor commit fails, gossip and insert
+    /// are skipped and the payload is stored in `pending_conductor_commit` for retry on the next
+    /// tick.
+    pub(super) async fn seal_and_commit_payload_if_applicable(
+        &mut self,
         unsealed_payload_handle: &UnsealedPayloadHandle,
     ) -> Result<(), SequencerActorError> {
         let seal_request_start = Instant::now();
 
-        // Send the seal request to the engine to seal the unsealed block.
+        // Fetch the sealed payload from the engine WITHOUT inserting it.
         let payload = self
             .engine_client
-            .seal_and_canonicalize_block(
+            .get_sealed_payload(
                 unsealed_payload_handle.payload_id,
                 unsealed_payload_handle.attributes_with_parent.clone(),
             )
@@ -158,20 +174,116 @@ where
             unsealed_payload_handle.attributes_with_parent.count_transactions();
         update_total_transactions_sequenced(payload_transaction_count);
 
-        // If the conductor is available, commit the payload to it.
+        // If the conductor is available, commit the payload to it BEFORE insertion.
         if let Some(conductor) = &self.conductor {
-            let _conductor_commitment_start = Instant::now();
-            if let Err(err) = conductor.commit_unsafe_payload(&payload).await {
-                error!(target: "sequencer", ?err, "Failed to commit unsafe payload to conductor");
+            let conductor_commitment_start = Instant::now();
+            let commit_result = conductor.commit_unsafe_payload(&payload).await;
+            update_conductor_commitment_duration_metrics(conductor_commitment_start.elapsed());
+            if let Err(err) = commit_result {
+                if self.conductor_commit_backoff.is_some() {
+                    // Backoff enabled: skip gossip and insert, retain the payload for retry.
+                    error!(
+                        target: "sequencer",
+                        error = %err,
+                        "Failed to commit unsafe payload to conductor, will retry on next tick"
+                    );
+                    self.pending_conductor_commit = Some(payload);
+                    return Ok(());
+                }
+                error!(
+                    target: "sequencer",
+                    error = %err,
+                    "Failed to commit unsafe payload to conductor"
+                );
             }
-
-            update_conductor_commitment_duration_metrics(_conductor_commitment_start.elapsed());
         }
 
+        // Gossip the payload.
         self.unsafe_payload_gossip_client
-            .schedule_execution_payload_gossip(payload)
+            .schedule_execution_payload_gossip(payload.clone())
             .await
-            .map_err(Into::into)
+            .map_err(SequencerActorError::from)?;
+
+        // Fire-and-forget insert into the engine.
+        if let Err(err) = self.engine_client.insert_unsafe_payload(payload).await {
+            error!(
+                target: "sequencer",
+                error = %err,
+                "Failed to insert unsafe payload into engine"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Retries a pending conductor commit stored from a previous failed attempt.
+    ///
+    /// Returns `true` if the commit succeeded (or there was nothing to retry), `false` if it
+    /// failed again. On success the payload is gossiped and inserted into the engine.
+    pub(super) async fn retry_pending_conductor_commit(&mut self) -> bool {
+        let Some(ref payload) = self.pending_conductor_commit else {
+            return true;
+        };
+        let Some(conductor) = &self.conductor else {
+            // No conductor configured: gossip and insert the pending payload directly so the block
+            // is not silently dropped (it was fetched but never inserted due to the commit failure).
+            let payload = self.pending_conductor_commit.take().unwrap();
+            if let Err(err) = self
+                .unsafe_payload_gossip_client
+                .schedule_execution_payload_gossip(payload.clone())
+                .await
+            {
+                error!(
+                    target: "sequencer",
+                    error = %err,
+                    "Failed to gossip payload when clearing pending commit (no conductor)"
+                );
+            }
+            if let Err(err) = self.engine_client.insert_unsafe_payload(payload).await {
+                error!(
+                    target: "sequencer",
+                    error = %err,
+                    "Failed to insert payload when clearing pending commit (no conductor)"
+                );
+            }
+            return true;
+        };
+        let conductor_commitment_start = Instant::now();
+        match conductor.commit_unsafe_payload(payload).await {
+            Ok(()) => {
+                update_conductor_commitment_duration_metrics(conductor_commitment_start.elapsed());
+                let payload = self.pending_conductor_commit.take().unwrap();
+                if let Err(err) = self
+                    .unsafe_payload_gossip_client
+                    .schedule_execution_payload_gossip(payload.clone())
+                    .await
+                {
+                    error!(
+                        target: "sequencer",
+                        error = %err,
+                        "Failed to gossip payload after successful conductor commit retry"
+                    );
+                }
+                // Fire-and-forget insert into the engine.
+                if let Err(err) = self.engine_client.insert_unsafe_payload(payload).await {
+                    error!(
+                        target: "sequencer",
+                        error = %err,
+                        "Failed to insert unsafe payload into engine after conductor commit retry"
+                    );
+                }
+                true
+            }
+            Err(err) => {
+                update_conductor_commitment_duration_metrics(conductor_commitment_start.elapsed());
+                error!(
+                    target: "sequencer",
+                    error = %err,
+                    "Conductor commit retry failed, will retry on next tick"
+                );
+                false
+            }
+        }
     }
 
     /// Starts building an L2 block by creating and populating payload attributes referencing the
@@ -439,6 +551,16 @@ where
                 // The sequencer must be active to build new blocks.
                 _ = build_ticker.tick(), if self.is_active => {
 
+                    // If a previous conductor commit is pending, retry it before doing anything
+                    // else. On failure, back off and skip this tick entirely.
+                    if let Some(backoff) = self.conductor_commit_backoff
+                        && self.pending_conductor_commit.is_some()
+                        && !self.retry_pending_conductor_commit().await
+                    {
+                        build_ticker.reset_after(backoff);
+                        continue;
+                    }
+
                     match self.seal_last_and_start_next(next_payload_to_seal.as_ref()).await {
                         Ok(res) => {
                             next_payload_to_seal = res.unsealed_payload_handle;
@@ -457,6 +579,15 @@ where
                             self.cancellation_token.cancel();
                             return Err(other_err);
                         }
+                    }
+
+                    // If a fresh conductor commit failure just occurred, back off before
+                    // attempting to seal or build the next block.
+                    if let Some(backoff) = self.conductor_commit_backoff
+                        && self.pending_conductor_commit.is_some()
+                    {
+                        build_ticker.reset_after(backoff);
+                        continue;
                     }
 
                     if let Some(ref payload) = next_payload_to_seal {

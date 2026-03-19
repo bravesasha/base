@@ -198,11 +198,18 @@ where
             }
         }
 
-        // Gossip the payload.
-        self.unsafe_payload_gossip_client
+        // Gossip the payload (best-effort; channel overflow is transient and non-fatal).
+        if let Err(err) = self
+            .unsafe_payload_gossip_client
             .schedule_execution_payload_gossip(payload.clone())
             .await
-            .map_err(SequencerActorError::from)?;
+        {
+            warn!(
+                target: "sequencer",
+                error = %err,
+                "Failed to gossip payload, continuing"
+            );
+        }
 
         // Fire-and-forget insert into the engine.
         if let Err(err) = self.engine_client.insert_unsafe_payload(payload).await {

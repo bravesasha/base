@@ -198,88 +198,48 @@ where
             }
         }
 
-        // Gossip the payload (best-effort; channel overflow is transient and non-fatal).
-        if let Err(err) = self
-            .unsafe_payload_gossip_client
+        // Gossip the payload to the p2p network.
+        self.unsafe_payload_gossip_client
             .schedule_execution_payload_gossip(payload.clone())
-            .await
-        {
-            warn!(
-                target: "sequencer",
-                error = %err,
-                "Failed to gossip payload, continuing"
-            );
-        }
+            .await?;
 
-        // Fire-and-forget insert into the engine.
-        if let Err(err) = self.engine_client.insert_unsafe_payload(payload).await {
-            error!(
-                target: "sequencer",
-                error = %err,
-                "Failed to insert unsafe payload into engine"
-            );
-        }
+        // Submit the payload to the engine for insertion.
+        self.engine_client.insert_unsafe_payload(payload).await?;
 
         Ok(())
     }
 
     /// Retries a pending conductor commit stored from a previous failed attempt.
     ///
-    /// Returns `true` if the commit succeeded (or there was nothing to retry), `false` if it
-    /// failed again. On success the payload is gossiped and inserted into the engine.
-    pub(super) async fn retry_pending_conductor_commit(&mut self) -> bool {
+    /// Returns `Ok(true)` if the commit succeeded (or there was nothing to retry), `Ok(false)` if
+    /// it failed again. On success the payload is gossiped and inserted into the engine.
+    ///
+    /// Gossip or engine-insert failures are propagated as errors so the caller can clear its
+    /// in-progress building state and re-anchor on the next tick.
+    pub(super) async fn retry_pending_conductor_commit(
+        &mut self,
+    ) -> Result<bool, SequencerActorError> {
         let Some(ref payload) = self.pending_conductor_commit else {
-            return true;
+            return Ok(true);
         };
         let Some(conductor) = &self.conductor else {
-            // No conductor configured: gossip and insert the pending payload directly so the block
-            // is not silently dropped (it was fetched but never inserted due to the commit failure).
             let payload = self.pending_conductor_commit.take().unwrap();
-            if let Err(err) = self
-                .unsafe_payload_gossip_client
+            self.unsafe_payload_gossip_client
                 .schedule_execution_payload_gossip(payload.clone())
-                .await
-            {
-                error!(
-                    target: "sequencer",
-                    error = %err,
-                    "Failed to gossip payload when clearing pending commit (no conductor)"
-                );
-            }
-            if let Err(err) = self.engine_client.insert_unsafe_payload(payload).await {
-                error!(
-                    target: "sequencer",
-                    error = %err,
-                    "Failed to insert payload when clearing pending commit (no conductor)"
-                );
-            }
-            return true;
+                .await?;
+            self.engine_client.insert_unsafe_payload(payload).await?;
+            return Ok(true);
         };
         let conductor_commitment_start = Instant::now();
         match conductor.commit_unsafe_payload(payload).await {
             Ok(()) => {
                 update_conductor_commitment_duration_metrics(conductor_commitment_start.elapsed());
                 let payload = self.pending_conductor_commit.take().unwrap();
-                if let Err(err) = self
-                    .unsafe_payload_gossip_client
+                self.unsafe_payload_gossip_client
                     .schedule_execution_payload_gossip(payload.clone())
-                    .await
-                {
-                    error!(
-                        target: "sequencer",
-                        error = %err,
-                        "Failed to gossip payload after successful conductor commit retry"
-                    );
-                }
-                // Fire-and-forget insert into the engine.
-                if let Err(err) = self.engine_client.insert_unsafe_payload(payload).await {
-                    error!(
-                        target: "sequencer",
-                        error = %err,
-                        "Failed to insert unsafe payload into engine after conductor commit retry"
-                    );
-                }
-                true
+                    .await?;
+                self.engine_client.insert_unsafe_payload(payload).await?;
+                Ok(true)
             }
             Err(err) => {
                 update_conductor_commitment_duration_metrics(conductor_commitment_start.elapsed());
@@ -288,7 +248,7 @@ where
                     error = %err,
                     "Conductor commit retry failed, will retry on next tick"
                 );
-                false
+                Ok(false)
             }
         }
     }
@@ -562,10 +522,19 @@ where
                     // else. On failure, back off and skip this tick entirely.
                     if let Some(backoff) = self.conductor_commit_backoff
                         && self.pending_conductor_commit.is_some()
-                        && !self.retry_pending_conductor_commit().await
                     {
-                        build_ticker.reset_after(backoff);
-                        continue;
+                        match self.retry_pending_conductor_commit().await {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                build_ticker.reset_after(backoff);
+                                continue;
+                            }
+                            Err(err) => {
+                                warn!(target: "sequencer", error = ?err, "Gossip or insert failed during conductor commit retry");
+                                next_payload_to_seal = None;
+                                continue;
+                            }
+                        }
                     }
 
                     match self.seal_last_and_start_next(next_payload_to_seal.as_ref()).await {
@@ -575,14 +544,24 @@ where
                         },
                         Err(SequencerActorError::EngineError(EngineClientError::SealError(err))) => {
                             if is_seal_task_err_fatal(&err) {
-                                error!(target: "sequencer", err=?err, "Critical seal task error occurred");
+                                error!(target: "sequencer", error = ?err, "Critical seal task error occurred");
                                 self.cancellation_token.cancel();
                                 return Err(SequencerActorError::EngineError(EngineClientError::SealError(err)));
                             }
                             next_payload_to_seal = None;
                         },
+                        Err(SequencerActorError::PayloadGossip(err)) => {
+                            warn!(target: "sequencer", error = ?err, "Failed to gossip payload");
+                            next_payload_to_seal = None;
+                        },
+                        Err(SequencerActorError::EngineError(
+                            err @ EngineClientError::RequestError(_),
+                        )) => {
+                            warn!(target: "sequencer", error = ?err, "Failed to insert unsafe payload into engine");
+                            next_payload_to_seal = None;
+                        },
                         Err(other_err) => {
-                            error!(target: "sequencer", err = ?other_err, "Unexpected error building or sealing payload");
+                            error!(target: "sequencer", error = ?other_err, "Unexpected error building or sealing payload");
                             self.cancellation_token.cancel();
                             return Err(other_err);
                         }

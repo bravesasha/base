@@ -244,7 +244,7 @@ async fn test_retry_pending_conductor_commit_success_gossips_and_clears() {
     actor.engine_client = client;
     actor.pending_conductor_commit = Some(envelope);
 
-    let succeeded = actor.retry_pending_conductor_commit().await;
+    let succeeded = actor.retry_pending_conductor_commit().await.expect("should not error");
 
     assert!(succeeded);
     assert!(actor.pending_conductor_commit.is_none());
@@ -265,7 +265,7 @@ async fn test_retry_pending_conductor_commit_failure_skips_gossip_and_preserves_
     actor.unsafe_payload_gossip_client = gossip;
     actor.pending_conductor_commit = Some(envelope);
 
-    let succeeded = actor.retry_pending_conductor_commit().await;
+    let succeeded = actor.retry_pending_conductor_commit().await.expect("should not error");
 
     assert!(!succeeded);
     assert!(actor.pending_conductor_commit.is_some());
@@ -289,7 +289,7 @@ async fn test_retry_pending_no_conductor_gossips_and_inserts() {
     actor.engine_client = client;
     actor.pending_conductor_commit = Some(envelope);
 
-    let succeeded = actor.retry_pending_conductor_commit().await;
+    let succeeded = actor.retry_pending_conductor_commit().await.expect("should not error");
 
     assert!(succeeded);
     assert!(actor.pending_conductor_commit.is_none());
@@ -336,4 +336,118 @@ async fn test_seal_last_and_start_next_skips_build_when_conductor_commit_stashed
     assert!(result.unwrap().unsealed_payload_handle.is_none());
     // The payload is held for retry on the next tick.
     assert!(actor.pending_conductor_commit.is_some());
+}
+
+// --- gossip failure propagation tests ---
+
+#[tokio::test]
+async fn test_seal_and_commit_gossip_failure_propagates() {
+    use crate::UnsafePayloadGossipClientError;
+
+    let envelope = dummy_envelope();
+
+    let mut client = MockSequencerEngineClient::new();
+    client.expect_get_sealed_payload().times(1).return_once(move |_, _| Ok(envelope));
+    client.expect_insert_unsafe_payload().times(0);
+
+    let mut gossip = MockUnsafePayloadGossipClient::new();
+    gossip.expect_schedule_execution_payload_gossip().times(1).return_once(|_| {
+        Err(UnsafePayloadGossipClientError::RequestError("channel closed".to_string()))
+    });
+
+    let mut actor = test_actor();
+    actor.engine_client = client;
+    actor.unsafe_payload_gossip_client = gossip;
+
+    let handle = UnsealedPayloadHandle {
+        payload_id: Default::default(),
+        attributes_with_parent: dummy_attributes_with_parent(),
+    };
+    let result = actor.seal_and_commit_payload_if_applicable(&handle).await;
+
+    assert!(matches!(result, Err(SequencerActorError::PayloadGossip(_))));
+}
+
+// --- insert failure propagation tests ---
+
+#[tokio::test]
+async fn test_seal_and_commit_insert_failure_propagates() {
+    use crate::actors::engine::EngineClientError;
+
+    let envelope = dummy_envelope();
+
+    let mut client = MockSequencerEngineClient::new();
+    client.expect_get_sealed_payload().times(1).return_once(move |_, _| Ok(envelope));
+    client.expect_insert_unsafe_payload().times(1).return_once(|_| {
+        Err(EngineClientError::RequestError("channel closed".to_string()))
+    });
+
+    let mut gossip = MockUnsafePayloadGossipClient::new();
+    gossip.expect_schedule_execution_payload_gossip().times(1).return_once(|_| Ok(()));
+
+    let mut actor = test_actor();
+    actor.engine_client = client;
+    actor.unsafe_payload_gossip_client = gossip;
+
+    let handle = UnsealedPayloadHandle {
+        payload_id: Default::default(),
+        attributes_with_parent: dummy_attributes_with_parent(),
+    };
+    let result = actor.seal_and_commit_payload_if_applicable(&handle).await;
+
+    assert!(matches!(result, Err(SequencerActorError::EngineError(EngineClientError::RequestError(_)))));
+}
+
+// --- retry_pending_conductor_commit gossip/insert failure tests ---
+
+#[tokio::test]
+async fn test_retry_pending_gossip_failure_propagates() {
+    use crate::UnsafePayloadGossipClientError;
+
+    let envelope = dummy_envelope();
+
+    let mut conductor = MockConductor::new();
+    conductor.expect_commit_unsafe_payload().times(1).return_once(|_| Ok(()));
+
+    let mut gossip = MockUnsafePayloadGossipClient::new();
+    gossip.expect_schedule_execution_payload_gossip().times(1).return_once(|_| {
+        Err(UnsafePayloadGossipClientError::RequestError("channel closed".to_string()))
+    });
+
+    let mut actor = test_actor();
+    actor.conductor = Some(conductor);
+    actor.unsafe_payload_gossip_client = gossip;
+    actor.pending_conductor_commit = Some(envelope);
+
+    let result = actor.retry_pending_conductor_commit().await;
+
+    assert!(matches!(result, Err(SequencerActorError::PayloadGossip(_))));
+}
+
+#[tokio::test]
+async fn test_retry_pending_insert_failure_propagates() {
+    use crate::actors::engine::EngineClientError;
+
+    let envelope = dummy_envelope();
+
+    let mut conductor = MockConductor::new();
+    conductor.expect_commit_unsafe_payload().times(1).return_once(|_| Ok(()));
+
+    let mut gossip = MockUnsafePayloadGossipClient::new();
+    gossip.expect_schedule_execution_payload_gossip().times(1).return_once(|_| Ok(()));
+
+    let mut client = MockSequencerEngineClient::new();
+    client.expect_insert_unsafe_payload().times(1).return_once(|_| {
+        Err(EngineClientError::RequestError("channel closed".to_string()))
+    });
+
+    let mut actor = test_actor();
+    actor.conductor = Some(conductor);
+    actor.unsafe_payload_gossip_client = gossip;
+    actor.engine_client = client;
+    actor.pending_conductor_commit = Some(envelope);
+
+    let result = actor.retry_pending_conductor_commit().await;
+
+    assert!(matches!(result, Err(SequencerActorError::EngineError(EngineClientError::RequestError(_)))));
 }

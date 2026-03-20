@@ -14,11 +14,7 @@ use crate::{
     actors::{
         MockConductor, MockOriginSelector, MockSequencerEngineClient,
         MockUnsafePayloadGossipClient,
-        sequencer::{
-            PayloadSealer,
-            actor::UnsealedPayloadHandle,
-            tests::test_util::test_actor,
-        },
+        sequencer::{PayloadSealer, actor::UnsealedPayloadHandle, tests::test_util::test_actor},
     },
 };
 
@@ -157,15 +153,15 @@ async fn test_sealer_full_pipeline_no_conductor() {
     assert_eq!(sealer.state, SealState::Sealed);
 
     let result = sealer.step(&conductor, &gossip, &engine).await;
-    assert_eq!(result.unwrap(), false);
+    assert!(!result.unwrap());
     assert_eq!(sealer.state, SealState::Committed);
 
     let result = sealer.step(&conductor, &gossip, &engine).await;
-    assert_eq!(result.unwrap(), false);
+    assert!(!result.unwrap());
     assert_eq!(sealer.state, SealState::Gossiped);
 
     let result = sealer.step(&conductor, &gossip, &engine).await;
-    assert_eq!(result.unwrap(), true);
+    assert!(result.unwrap());
 }
 
 #[tokio::test]
@@ -185,15 +181,15 @@ async fn test_sealer_full_pipeline_with_conductor() {
     let mut sealer = PayloadSealer::new(envelope);
 
     let result = sealer.step(&conductor, &gossip, &engine).await;
-    assert_eq!(result.unwrap(), false);
+    assert!(!result.unwrap());
     assert_eq!(sealer.state, SealState::Committed);
 
     let result = sealer.step(&conductor, &gossip, &engine).await;
-    assert_eq!(result.unwrap(), false);
+    assert!(!result.unwrap());
     assert_eq!(sealer.state, SealState::Gossiped);
 
     let result = sealer.step(&conductor, &gossip, &engine).await;
-    assert_eq!(result.unwrap(), true);
+    assert!(result.unwrap());
 }
 
 #[tokio::test]
@@ -249,9 +245,10 @@ async fn test_sealer_insert_failure_stays_gossiped() {
     gossip.expect_schedule_execution_payload_gossip().times(1).return_once(|_| Ok(()));
 
     let mut engine = MockSequencerEngineClient::new();
-    engine.expect_insert_unsafe_payload().times(1).return_once(|_| {
-        Err(EngineClientError::RequestError("channel closed".to_string()))
-    });
+    engine
+        .expect_insert_unsafe_payload()
+        .times(1)
+        .return_once(|_| Err(EngineClientError::RequestError("channel closed".to_string())));
 
     let conductor: Option<MockConductor> = None;
     let mut sealer = PayloadSealer::new(envelope);

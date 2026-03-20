@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Tracks where a sealed payload is in the commit → gossip → insert pipeline.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SealState {
     /// Ready for conductor commit.
     Sealed,
@@ -39,7 +39,7 @@ pub struct PayloadSealer {
 
 impl PayloadSealer {
     /// Creates a new sealer starting at the [`SealState::Sealed`] stage.
-    pub fn new(envelope: OpExecutionPayloadEnvelope) -> Self {
+    pub const fn new(envelope: OpExecutionPayloadEnvelope) -> Self {
         Self { envelope, state: SealState::Sealed }
     }
 
@@ -102,4 +102,3 @@ pub enum SealStepError {
     #[error("engine insert failed: {0}")]
     Insert(crate::actors::engine::EngineClientError),
 }
-

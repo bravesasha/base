@@ -1,7 +1,7 @@
 //! Contains upgrade logging wrapper type.
 
-use base_consensus_genesis::RollupConfig;
 use base_alloy_rpc_types_engine::OpPayloadAttributes;
+use base_consensus_genesis::RollupConfig;
 
 // TODO(refcell): Move this into a crate where it can be re-used.
 

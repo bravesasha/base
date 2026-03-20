@@ -30,19 +30,18 @@ pub use actors::{
     L1WatcherActor, L1WatcherActorError, L1WatcherDerivationClient, L2SourceClient, NetworkActor,
     NetworkActorError, NetworkBuilder, NetworkBuilderError, NetworkConfig, NetworkDriver,
     NetworkDriverError, NetworkEngineClient, NetworkHandler, NetworkInboundData, NodeActor,
-    OriginSelector, QueuedDerivationEngineClient, QueuedEngineDerivationClient,
-    QueuedEngineRpcClient, QueuedL1WatcherDerivationClient, QueuedNetworkEngineClient,
-    QueuedSequencerAdminAPIClient, QueuedSequencerEngineClient, QueuedUnsafePayloadGossipClient,
-    ResetRequest, RpcActor, RpcActorError, RpcContext, SealRequest, SequencerActor,
-    SequencerActorError, SequencerAdminQuery, SequencerConfig, SequencerEngineClient,
-    UnsafePayloadGossipClient, UnsafePayloadGossipClientError, UpgradeActivations,
-    PoolActivation, PayloadSealer, SealState, SealStepError,
+    OriginSelector, PayloadSealer, PoolActivation, QueuedDerivationEngineClient,
+    QueuedEngineDerivationClient, QueuedEngineRpcClient, QueuedL1WatcherDerivationClient,
+    QueuedNetworkEngineClient, QueuedSequencerAdminAPIClient, QueuedSequencerEngineClient,
+    QueuedUnsafePayloadGossipClient, ResetRequest, RpcActor, RpcActorError, RpcContext,
+    SealRequest, SealState, SealStepError, SequencerActor, SequencerActorError,
+    SequencerAdminQuery, SequencerConfig, SequencerEngineClient, UnsafePayloadGossipClient,
+    UnsafePayloadGossipClientError, UpgradeActivations,
 };
 
 mod metrics;
-pub use metrics::Metrics;
-
 #[cfg(test)]
 pub use actors::{
     MockConductor, MockOriginSelector, MockSequencerEngineClient, MockUnsafePayloadGossipClient,
 };
+pub use metrics::Metrics;

@@ -4,8 +4,7 @@
 //!
 //! [op-node]: https://github.com/ethereum-optimism/optimism/blob/develop/op-node/flags/flags.go#L233-L265
 
-use std::num::ParseIntError;
-use std::time::Duration;
+use std::{num::ParseIntError, time::Duration};
 
 use base_consensus_node::SequencerConfig;
 use clap::Parser;

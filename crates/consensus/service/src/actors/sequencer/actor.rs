@@ -15,8 +15,8 @@ use tokio::{select, sync::mpsc};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 
 use crate::{
-    UpgradeActivations, PoolActivation,
-    CancellableContext, NodeActor, SequencerAdminQuery, UnsafePayloadGossipClient,
+    CancellableContext, NodeActor, PoolActivation, SequencerAdminQuery, UnsafePayloadGossipClient,
+    UpgradeActivations,
     actors::{
         SequencerEngineClient,
         engine::EngineClientError,
@@ -118,9 +118,7 @@ where
             .await?;
 
         update_seal_duration_metrics(seal_request_start.elapsed());
-        update_total_transactions_sequenced(
-            handle.attributes_with_parent.count_transactions(),
-        );
+        update_total_transactions_sequenced(handle.attributes_with_parent.count_transactions());
 
         Ok(PayloadSealer::new(envelope))
     }
@@ -241,7 +239,8 @@ where
 
         UpgradeActivations::log(&self.rollup_config, &attributes);
         let activator = PoolActivation::new(self.rollup_config.clone());
-        attributes.no_tx_pool = Some(!activator.is_enabled(self.in_recovery_mode, l1_origin, &attributes));
+        attributes.no_tx_pool =
+            Some(!activator.is_enabled(self.in_recovery_mode, l1_origin, &attributes));
 
         let attrs_with_parent = OpAttributesWithParent::new(attributes, unsafe_head, None, false);
         Ok(Some(attrs_with_parent))

@@ -7,7 +7,7 @@ use std::{
 
 use alloy_rpc_types_engine::PayloadId;
 use async_trait::async_trait;
-use base_alloy_rpc_types_engine::{OpExecutionPayloadEnvelope, OpPayloadAttributes};
+use base_alloy_rpc_types_engine::OpExecutionPayloadEnvelope;
 use base_consensus_derive::{AttributesBuilder, PipelineErrorKind};
 use base_consensus_engine::{InsertTaskError, SealTaskError, SynchronizeTaskError};
 use base_consensus_genesis::RollupConfig;
@@ -16,6 +16,7 @@ use tokio::{select, sync::mpsc};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 
 use crate::{
+    UpgradeActivations, PoolActivation,
     CancellableContext, NodeActor, SequencerAdminQuery, UnsafePayloadGossipClient,
     actors::{
         SequencerEngineClient,
@@ -367,82 +368,12 @@ where
             }
         };
 
-        self.log_hardfork_activation(attributes.payload_attributes.timestamp);
-        attributes.no_tx_pool = Some(!self.should_use_tx_pool(l1_origin, &attributes));
+        UpgradeActivations::log(&self.rollup_config, &attributes);
+        let activator = PoolActivation::new(self.rollup_config.clone());
+        attributes.no_tx_pool = Some(!activator.is_enabled(self.in_recovery_mode, l1_origin, &attributes));
 
         let attrs_with_parent = OpAttributesWithParent::new(attributes, unsafe_head, None, false);
         Ok(Some(attrs_with_parent))
-    }
-
-    /// Logs hardfork activation when building the first block of a fork.
-    fn log_hardfork_activation(&self, timestamp: u64) {
-        if self.rollup_config.is_first_ecotone_block(timestamp) {
-            info!(target: "sequencer", "Sequencing ecotone upgrade block");
-        } else if self.rollup_config.is_first_fjord_block(timestamp) {
-            info!(target: "sequencer", "Sequencing fjord upgrade block");
-        } else if self.rollup_config.is_first_granite_block(timestamp) {
-            info!(target: "sequencer", "Sequencing granite upgrade block");
-        } else if self.rollup_config.is_first_holocene_block(timestamp) {
-            info!(target: "sequencer", "Sequencing holocene upgrade block");
-        } else if self.rollup_config.is_first_isthmus_block(timestamp) {
-            info!(target: "sequencer", "Sequencing isthmus upgrade block");
-        } else if self.rollup_config.is_first_jovian_block(timestamp) {
-            info!(target: "sequencer", "Sequencing jovian upgrade block");
-        } else if self.rollup_config.is_first_base_v1_block(timestamp) {
-            info!(target: "sequencer", "Sequencing base v1 upgrade block");
-        }
-    }
-
-    /// Determines, for the provided L1 origin block and payload attributes being constructed, if
-    /// transaction pool transactions should be enabled.
-    fn should_use_tx_pool(&self, l1_origin: BlockInfo, attributes: &OpPayloadAttributes) -> bool {
-        if self.in_recovery_mode {
-            warn!(target: "sequencer", "Sequencer is in recovery mode, producing empty block");
-            return false;
-        }
-
-        // If the next L2 block is beyond the sequencer drift threshold, we must produce an empty
-        // block.
-        if attributes.payload_attributes.timestamp
-            > l1_origin.timestamp + self.rollup_config.max_sequencer_drift(l1_origin.timestamp)
-        {
-            return false;
-        }
-
-        // Do not include transactions in the first Ecotone block.
-        if self.rollup_config.is_first_ecotone_block(attributes.payload_attributes.timestamp) {
-            return false;
-        }
-
-        // Do not include transactions in the first Fjord block.
-        if self.rollup_config.is_first_fjord_block(attributes.payload_attributes.timestamp) {
-            return false;
-        }
-
-        // Do not include transactions in the first Granite block.
-        if self.rollup_config.is_first_granite_block(attributes.payload_attributes.timestamp) {
-            return false;
-        }
-
-        // Do not include transactions in the first Holocene block.
-        if self.rollup_config.is_first_holocene_block(attributes.payload_attributes.timestamp) {
-            return false;
-        }
-
-        // Do not include transactions in the first Isthmus block.
-        if self.rollup_config.is_first_isthmus_block(attributes.payload_attributes.timestamp) {
-            return false;
-        }
-
-        // Do not include transactions in the first Jovian block.
-        // See: `<https://github.com/ethereum-optimism/specs/blob/main/specs/protocol/jovian/derivation.md#activation-block-rules>`
-        if self.rollup_config.is_first_jovian_block(attributes.payload_attributes.timestamp) {
-            return false;
-        }
-
-        // Transaction pool transactions are enabled if none of the reasons to disable are satisfied
-        // above.
-        true
     }
 
     /// Schedules the initial engine reset request and waits for the unsafe head to be updated.

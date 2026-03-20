@@ -42,14 +42,15 @@ pub use network::{
 };
 
 mod sequencer;
-
-#[cfg(test)]
-pub use network::MockUnsafePayloadGossipClient;
 pub use sequencer::{
     Conductor, ConductorClient, ConductorError, DelayedL1OriginSelectorProvider, L1OriginSelector,
     L1OriginSelectorError, L1OriginSelectorProvider, OriginSelector, QueuedSequencerEngineClient,
     SequencerActor, SequencerActorError, SequencerAdminQuery, SequencerConfig,
-    SequencerEngineClient,
+    SequencerEngineClient, UpgradeActivations, PoolActivation, SealStatus, SealError, PayloadSealer,
 };
+
+#[cfg(test)]
+pub use network::MockUnsafePayloadGossipClient;
+
 #[cfg(test)]
 pub use sequencer::{MockConductor, MockOriginSelector, MockSequencerEngineClient};

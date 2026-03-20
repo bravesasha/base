@@ -35,12 +35,14 @@ pub use actors::{
     QueuedSequencerAdminAPIClient, QueuedSequencerEngineClient, QueuedUnsafePayloadGossipClient,
     ResetRequest, RpcActor, RpcActorError, RpcContext, SealRequest, SequencerActor,
     SequencerActorError, SequencerAdminQuery, SequencerConfig, SequencerEngineClient,
-    UnsafePayloadGossipClient, UnsafePayloadGossipClientError,
+    UnsafePayloadGossipClient, UnsafePayloadGossipClientError, UpgradeActivations,
+    PoolActivation, SealStatus, SealError, PayloadSealer,
 };
 
 mod metrics;
+pub use metrics::Metrics;
+
 #[cfg(test)]
 pub use actors::{
     MockConductor, MockOriginSelector, MockSequencerEngineClient, MockUnsafePayloadGossipClient,
 };
-pub use metrics::Metrics;

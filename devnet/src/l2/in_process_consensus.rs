@@ -174,7 +174,6 @@ impl InProcessConsensus {
                 sequencer_recovery_mode: false,
                 conductor_rpc_url: None,
                 l1_conf_delay: 0,
-                conductor_commit_backoff: Some(std::time::Duration::from_millis(50)),
             });
         }
 

@@ -1,104 +1,105 @@
-//! Contains a handle wrapper type to an unsealed payload to allow for iterative retries.
+//! Payload sealer state machine.
+//!
+//! Tracks a sealed payload through the commit → gossip → insert pipeline,
+//! retrying the current step on failure without rebuilding the payload.
 
-use base_protocol::OpAttributesWithParent;
+use base_alloy_rpc_types_engine::OpExecutionPayloadEnvelope;
 
-/// The `SealStatus` enum represents the status of a sealing operation.
+use crate::{
+    UnsafePayloadGossipClient,
+    actors::{SequencerEngineClient, sequencer::conductor::Conductor},
+};
+
+/// Tracks where a sealed payload is in the commit → gossip → insert pipeline.
 #[derive(Debug, Clone, PartialEq)]
-pub enum SealStatus {
-    /// The sealing process hasn't started yet.
-    NotStarted,
-    /// The sealing process has committed the payload to conductor.
+pub enum SealState {
+    /// Ready for conductor commit.
+    Sealed,
+    /// Conductor accepted. Ready for gossip.
     Committed,
-    /// The sealing process has gossiped the payload to the network.
+    /// Gossiped to peers. Ready for engine insertion.
     Gossiped,
-    /// The sealing process has inserted the payload and is complete.
-    Inserted,
 }
 
-impl SealStatus {
-    /// Returns if the sealing process is complete, which is when the status is `Inserted`.
-    pub fn is_complete(&self) -> bool {
-        matches!(self, SealStatus::Inserted)
-    }
-
-    /// Returns if the sealing process has started, which is when the status is not `NotStarted`.
-    pub fn has_started(&self) -> bool {
-        !matches!(self, SealStatus::NotStarted)
-    }
-}
-
-/// The `SealError` enum represents errors that can occur during the sealing process.
-#[derive(Debug, thiserror::Error)]
-pub enum SealError {
-    /// The sealing process failed to finish in time for a newly built block.
-    #[error("sealing process failed to finish in time for newly built block")]
-    CriticalUnfinishedSealed,
-}
-
-/// The `PayloadSealer` struct is a wrapper around an unsealed payload that tracks the sealing status.
-#[derive(Debug, Clone)]
+/// Drives a sealed payload through the commit → gossip → insert pipeline.
+///
+/// Each call to [`PayloadSealer::step`] performs exactly one async operation
+/// based on the current [`SealState`]. On success the state advances; on
+/// failure the state is unchanged so the same step is retried on the next call.
+///
+/// Once insertion succeeds, `step` returns `Ok(true)` and the caller should
+/// remove the sealer (the pipeline is complete).
+#[derive(Debug)]
 pub struct PayloadSealer {
-    /// The unsealed payload that is being tracked.
-    pub current_payload: OpAttributesWithParent,
-    /// The current status of the sealing process for the payload.
-    pub seal_status: SealStatus,
-    /// Whether a job is currently in flight.
-    pub in_flight: bool,
+    /// The sealed execution payload being driven through the pipeline.
+    pub envelope: OpExecutionPayloadEnvelope,
+    /// Current pipeline stage.
+    pub state: SealState,
 }
 
 impl PayloadSealer {
-    /// Attempts to make progress on the payload sealer if required.
-    pub fn step(&mut self, payload: Option<OpAttributesWithParent>) -> Result<(), SealError> {
-        if let Some(attributes) = payload {
-            if !self.seal_status.is_complete() && attributes != self.current_payload {
-                error!(target: "sequencer", "Critical error: sealing process failed to finish in time for newly built block");
-                // When this is returned, it is expected that the call site handle this.
-                // Some options could be to transfer leadership, set a metric, etc.
-                return Err(SealError::CriticalUnfinishedSealed);
-            }
-
-            self.reset(attributes);
-        }
-
-        self.inner_step();
-
-        Ok(())
+    /// Creates a new sealer starting at the [`SealState::Sealed`] stage.
+    pub fn new(envelope: OpExecutionPayloadEnvelope) -> Self {
+        Self { envelope, state: SealState::Sealed }
     }
 
-    /// Performs the inner step.
-    pub fn inner_step(&mut self) {
-        if self.in_flight {
-            trace!(target: "sequencer", "sealing is inflight, skipping");
-            return;
+    /// Performs one step of the seal pipeline.
+    ///
+    /// Returns `Ok(true)` when the pipeline is complete (payload inserted).
+    /// Returns `Ok(false)` when the step succeeded but more steps remain.
+    /// Returns `Err` when the step failed — state is unchanged for retry.
+    pub async fn step<C, G, E>(
+        &mut self,
+        conductor: &Option<C>,
+        gossip_client: &G,
+        engine_client: &E,
+    ) -> Result<bool, SealStepError>
+    where
+        C: Conductor,
+        G: UnsafePayloadGossipClient,
+        E: SequencerEngineClient,
+    {
+        match self.state {
+            SealState::Sealed => {
+                if let Some(conductor) = conductor {
+                    conductor
+                        .commit_unsafe_payload(&self.envelope)
+                        .await
+                        .map_err(SealStepError::Conductor)?;
+                }
+                self.state = SealState::Committed;
+                Ok(false)
+            }
+            SealState::Committed => {
+                gossip_client
+                    .schedule_execution_payload_gossip(self.envelope.clone())
+                    .await
+                    .map_err(SealStepError::Gossip)?;
+                self.state = SealState::Gossiped;
+                Ok(false)
+            }
+            SealState::Gossiped => {
+                engine_client
+                    .insert_unsafe_payload(self.envelope.clone())
+                    .await
+                    .map_err(SealStepError::Insert)?;
+                Ok(true)
+            }
         }
-
-        match self.seal_status {
-            SealStatus::NotStarted => {
-                trace!(target: "sequencer", "starting sealing process");
-                self.in_flight = true;
-                // TODO: spawn an async task to perform the commit to conductor, and upon completion, update the seal status to `Committed`.
-            }
-            SealStatus::Committed => {
-                trace!(target: "sequencer", "committed payload, gossiping to network");
-                self.in_flight = true;
-                // TODO: spawn an async task to perform the gossip to the network, and upon completion, update the seal status to `Gossiped`.
-            }
-            SealStatus::Gossiped => {
-                trace!(target: "sequencer", "gossiped payload, inserting into local engine");
-                self.in_flight = true;
-                // TODO: spawn an async task to perform the engine client insert, and upon completion, update the seal status to `Inserted`.
-            }
-            SealStatus::Inserted => {
-                trace!(target: "sequencer", "payload inserted, sealing process complete");
-            }
-        }
-    }
-
-    /// Resets the [`PayloadSealer`] with the new provided payload, and resets the sealing status to `NotStarted`.
-    pub fn reset(&mut self, payload: OpAttributesWithParent) {
-        self.current_payload = payload;
-        self.seal_status = SealStatus::NotStarted;
     }
 }
 
+/// Errors from a single seal pipeline step.
+#[derive(Debug, thiserror::Error)]
+pub enum SealStepError {
+    /// Conductor commit failed.
+    #[error("conductor commit failed: {0}")]
+    Conductor(crate::ConductorError),
+    /// Gossip scheduling failed.
+    #[error("gossip failed: {0}")]
+    Gossip(crate::UnsafePayloadGossipClientError),
+    /// Engine insertion failed.
+    #[error("engine insert failed: {0}")]
+    Insert(crate::actors::engine::EngineClientError),
+}
 

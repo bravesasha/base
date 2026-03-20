@@ -46,7 +46,7 @@ pub use sequencer::{
     Conductor, ConductorClient, ConductorError, DelayedL1OriginSelectorProvider, L1OriginSelector,
     L1OriginSelectorError, L1OriginSelectorProvider, OriginSelector, QueuedSequencerEngineClient,
     SequencerActor, SequencerActorError, SequencerAdminQuery, SequencerConfig,
-    SequencerEngineClient, UpgradeActivations, PoolActivation, SealStatus, SealError, PayloadSealer,
+    SequencerEngineClient, UpgradeActivations, PoolActivation, PayloadSealer, SealState, SealStepError,
 };
 
 #[cfg(test)]

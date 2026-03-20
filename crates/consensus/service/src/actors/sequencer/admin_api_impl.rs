@@ -157,9 +157,7 @@ where
     pub(super) async fn stop_sequencer(&mut self) -> Result<B256, SequencerAdminAPIError> {
         info!(target: "sequencer", "Stopping sequencer");
         self.is_active = false;
-        // Drop any payload that was fetched but not yet committed/inserted so it is not
-        // replayed against a potentially different chain state on the next start.
-        self.pending_conductor_commit = None;
+        self.sealer = None;
 
         self.update_metrics();
 

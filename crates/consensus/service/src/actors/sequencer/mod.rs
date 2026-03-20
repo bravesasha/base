@@ -10,7 +10,7 @@ pub use origin_selector::{
 };
 
 mod seal;
-pub use seal::{SealStatus, SealError, PayloadSealer};
+pub use seal::{PayloadSealer, SealState, SealStepError};
 
 mod pool;
 pub use pool::PoolActivation;
